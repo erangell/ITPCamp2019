@@ -16,7 +16,7 @@
  * 2012-JUN-02: changed pin assignments: 8->9 9->10
  * 2013-JAN-20: continuous playback incrementing song number until file not found
  * 2019-MAY-25: reverted to one-shot mode - play song then wait for new command of which song to play next
- * 2019-MAY-26: fixed bug with playtrig not working
+ * 2019-MAY-26: for Micro SD shield cannot use pins 8,10-13.  Changed playtrig to use A0 as a digital input, removed halt on file not found.
  */
 
 #define HEADER_CHUNK_ID 0x4D546864  // MThd
@@ -95,7 +95,6 @@ const int b3 = 5;
 const int b4 = 6;
 const int b5 = 7;
 const int b6 = 9;
-const int b7 = 10;
 
 
 int bs0 = 0;
@@ -178,7 +177,6 @@ void setup() {
   pinMode(b4, INPUT);     
   pinMode(b5, INPUT);     
   pinMode(b6, INPUT);     
-  pinMode(b7, INPUT);     
   
   while (playtrig == 0)
   {
@@ -189,7 +187,7 @@ void setup() {
     bs4 = digitalRead(b4);
     bs5 = digitalRead(b5);
     bs6 = digitalRead(b6); 
-    playtrig = digitalRead(b7);
+    playtrig = (analogRead(A0) > 1000);
   }
   
  if (debugSong)
@@ -694,9 +692,10 @@ void loop()
        {
            Serial.println("FILE NOT FOUND ");       
        }
-       while (1==1) {
+       file_closed = 1;
+       //while (1==1) {
            // halt condition - use missing file number to signal end of a set
-       }
+       //}
      }
      
      //Phase processing
@@ -733,7 +732,7 @@ void loop()
     bs4 = digitalRead(b4);
     bs5 = digitalRead(b5);
     bs6 = digitalRead(b6);
-    playtrig = digitalRead(b7);
+    playtrig = (analogRead(A0) > 1000);
   }
   
   inbyte=0;
