@@ -5,7 +5,7 @@
 /* Arduino SD Card MIDI Song Player - by Eric Rangell - Release 1.00 - 2012-JUN-04
  * Adapted from open-source Arduino MIDI code.  Published in the public domain.
  *
- * Use DIP switches to select song 001.MID to 255.MID in the root of the SD card.  Reset button plays song.d
+ * Use DIP switches to select song 001.MID to 255.MID in the root of the SD card.  Reset button plays song.
  * Song 000 does note off 0-127 on channels 0-15.
  * Set debugSong = true to debug songs that don't play.
  * For Type 1 Midi Files, program will attempt to play data from track #2.
@@ -15,10 +15,8 @@
  * 2012-MAY-28: fixed bug with long songs that didn't play
  * 2012-JUN-02: changed pin assignments: 8->9 9->10
  * 2013-JAN-20: continuous playback incrementing song number until file not found
- * 2013-MAY-31: if song # > 127, get directory number from lower 7 bits and start playing from song 000
- * 2013-JUN-08: use analog a0-a5 to select subdirectory.
- * 2014-NOV-28: testing tempo change issues with Standards songs
- * 2016-DEC-28: Fix for small resistance on analog switches 3 and 4
+ * 2019-MAY-25: reverted to one-shot mode - play song then wait for new command of which song to play next
+ * 2019-MAY-26: fixed bug with playtrig not working
  */
 
 #define HEADER_CHUNK_ID 0x4D546864  // MThd
@@ -64,7 +62,6 @@ boolean last_block = false;
 boolean file_closed = false;
 boolean logging = true;
 char currentSong[13];
-char TheSubDir[13];
 uint16_t bufsiz=SD_BUFFER_SIZE;
 uint8_t buf1[SD_BUFFER_SIZE];
 uint16_t bytesread1;
@@ -99,16 +96,7 @@ const int b4 = 6;
 const int b5 = 7;
 const int b6 = 9;
 const int b7 = 10;
-const int b8 = 11;
-const int b9 = 12;
 
-//use analog pins as digital inputs
-const int a0 = 0;
-const int a1 = 1;
-const int a2 = 2;
-const int a3 = 3;
-const int a4 = 4;
-const int a5 = 5;
 
 int bs0 = 0;
 int bs1 = 0;
@@ -117,17 +105,9 @@ int bs3 = 0;
 int bs4 = 0;
 int bs5 = 0;
 int bs6 = 0;
-int bs7 = 0;
-
-int as0 = 0;
-int as1 = 0;
-int as2 = 0;
-int as3 = 0;
-int as4 = 0;
-int as5 = 0;
+int playtrig = 0;
 
 int inbyte = 0; 
-int analog = 0; 
 
 boolean debugSong = false;
 
@@ -135,7 +115,6 @@ boolean debugSong = false;
 Sd2Card card;
 SdVolume volume;
 SdFile root;
-SdFile subdir;
 SdFile file;
 
 // store error strings in flash to save RAM
@@ -200,33 +179,23 @@ void setup() {
   pinMode(b5, INPUT);     
   pinMode(b6, INPUT);     
   pinMode(b7, INPUT);     
-
-  pinMode(a0, INPUT);     
-  pinMode(a1, INPUT);     
-  pinMode(a2, INPUT);     
-  pinMode(a3, INPUT);     
-  pinMode(a4, INPUT);     
-  pinMode(a5, INPUT);     
   
-  bs0 = digitalRead(b0);
-  bs1 = digitalRead(b1);
-  bs2 = digitalRead(b2);
-  bs3 = digitalRead(b3);
-  bs4 = digitalRead(b4);
-  bs5 = digitalRead(b5);
-  bs6 = digitalRead(b6);
-  bs7 = digitalRead(b7);
-
-  as0 = analogRead(a0);
-  as1 = analogRead(a1);
-  as2 = analogRead(a2);
-  as3 = analogRead(a3);
-  as4 = analogRead(a4);
-  as5 = analogRead(a5);
+  while (playtrig == 0)
+  {
+    bs0 = digitalRead(b0);
+    bs1 = digitalRead(b1);
+    bs2 = digitalRead(b2);
+    bs3 = digitalRead(b3);
+    bs4 = digitalRead(b4);
+    bs5 = digitalRead(b5);
+    bs6 = digitalRead(b6); 
+    playtrig = digitalRead(b7);
+  }
   
-  if (debugSong)
+ if (debugSong)
  {
    Serial.begin(9600);
+   logs("debugSong = true");
  }
  else
  {
@@ -266,81 +235,9 @@ void setup() {
   if (bs6 == HIGH) {     
     inbyte += 64;
   } 
-  if (bs7 == HIGH) {     
-    inbyte += 128;
-  }
-
-  //2016-12-28: fix for resistance on switches as3 and as4 - threshold level = 1000
-  analog=0;
-  if (as0 > 1000) {     
-    analog += 1;
-  } 
-  if (as1 > 1000 ) {     
-    analog += 2;
-  } 
-  if (as2 > 1000) {     
-    analog += 4;
-  } 
-  if (as3 > 1000) {     
-    analog += 8;
-  } 
-  if (as4 > 1000) {     
-    analog += 16;
-  } 
-  if (as5 > 1000) {     
-    analog += 32;
-  } 
-
-  if (debugSong)
-  {
-       Serial.println();
-       Serial.print("as0= ");
-       Serial.println(as0);
-       Serial.print("as1= ");
-       Serial.println(as1);
-       Serial.print("as2= ");
-       Serial.println(as2);
-       Serial.print("as3= ");
-       Serial.println(as3);
-       Serial.print("as4= ");
-       Serial.println(as4);
-       Serial.print("as5= ");
-       Serial.println(as5);
-  }
-    
-  if (analog > 0)
-  {
-    int currentSubdir = analog;
-    TheSubDir[2] = currentSubdir%10 + '0';
-    currentSubdir = currentSubdir / 10;
-    TheSubDir[1] = currentSubdir%10 + '0';
-    currentSubdir = currentSubdir / 10;
-    TheSubDir[0] = currentSubdir%10 + '0';
-    currentSong[3] = '\0';
-     
-    if (debugSong)
-    {
-       Serial.println();
-       Serial.print("Current Subdir: ");
-       Serial.println(TheSubDir);
-    }
-
-    // test for existence of subdir
-    if (!subdir.open(root, TheSubDir, O_READ)) 
-    {
-       if (debugSong)
-       {
-           Serial.println("SUBDIR NOT FOUND ");       
-       }
-       while (1==1) {
-           // halt condition - use missing file number to signal end of a set
-       }
-    }
-  }
-  else
-  {
-	subdir.openRoot(volume);
-  }
+  //if (bs7 == HIGH) {     
+  //  inbyte += 128;
+  //}
 }
 
 void SendAllNotesOff() 
@@ -354,12 +251,9 @@ void SendAllNotesOff()
   }
 }
 void midiOutShortMsg(int cmd, int pitch, int velocity) {
-  if (!debugSong)
-  {
-    Serial.print(cmd, BYTE);
-    Serial.print(pitch, BYTE);
-    Serial.print(velocity, BYTE);
-  }
+  Serial.print(cmd, BYTE);
+  Serial.print(pitch, BYTE);
+  Serial.print(velocity, BYTE);
 }
 
 void logs(char* string) {
@@ -434,7 +328,7 @@ void ReadMidiByte()
   {
     if (!file_opened)
     {
-       if (file.open(subdir, currentSong, O_READ)) 
+       if (file.open(root, currentSong, O_READ)) 
        {
           logs("Opened file");
           file_opened = true;
@@ -682,15 +576,11 @@ int processTrackEvent(boolean runningMode, int lastByte) {
 void processTempoEvent(int paramIndex, byte param) {
   byte bits = 16 - 8*paramIndex;
   microseconds = (microseconds & ~((long) 0xFF << bits)) | ((long) param << bits);
-  if (debugSong)
-  {
-    Serial.println("=====");
-    Serial.print("TEMPO:");
-    Serial.println(microseconds);
-  }
+  //Serial.print("TEMPO:");
+  //Serial.println(microseconds);
 }
   
-unsigned long getMicrosecondsPerQuarterNote() {
+long getMicrosecondsPerQuarterNote() {
   return microseconds;
 }
 
@@ -732,10 +622,7 @@ void playback(int channel, int note, int velocity, unsigned long delta) {
     
     if(currMillis < lastMillis + deltaMillis)
     {
-      if (!debugSong)
-      {
-        delay(lastMillis - currMillis + deltaMillis);
-      }
+      delay(lastMillis - currMillis + deltaMillis);
     }
   }
 
@@ -750,26 +637,20 @@ void playback(int channel, int note, int velocity, unsigned long delta) {
   lastMillis = millis();
 }
 
-void midiShortMsg(int cmd, int pitch, int velocity) {
-  if (!debugSong)
-  {  
-    Serial.print(cmd, BYTE);
-    //Serial.print(" ");
-    Serial.print(pitch, BYTE);
-    //Serial.print(" ");
-    Serial.print(velocity, BYTE);
-    //Serial.println();
-}
+void midiShortMsg(int cmd, int pitch, int velocity) {  
+  Serial.print(cmd, BYTE);
+  //Serial.print(" ");
+  Serial.print(pitch, BYTE);
+  //Serial.print(" ");
+  Serial.print(velocity, BYTE);
+  //Serial.println();
 }
 
 void midi2ByteMsg(int cmd, int value) {
-  if (!debugSong)
-  {
-    Serial.print(cmd, BYTE);
-    //Serial.print(" ");
-    Serial.print(value, BYTE);
-    //Serial.println();
-  }
+  Serial.print(cmd, BYTE);
+  //Serial.print(" ");
+  Serial.print(value, BYTE);
+  //Serial.println();
 }
 
 void loop()
@@ -803,7 +684,7 @@ void loop()
      }
 
      // test for existence of file - if it opens, close it - it will be reopened when chunks processed
-     if (file.open(subdir, currentSong, O_READ)) 
+     if (file.open(root, currentSong, O_READ)) 
      {
        file.close();
      }
@@ -813,8 +694,9 @@ void loop()
        {
            Serial.println("FILE NOT FOUND ");       
        }
-       inbyte=0; // force loop back to song 001
-       file_closed = true;
+       while (1==1) {
+           // halt condition - use missing file number to signal end of a set
+       }
      }
      
      //Phase processing
@@ -837,11 +719,49 @@ void loop()
         }
      }
    }
-   inbyte++;
+   //2019-05-25: do not play next song
+   //inbyte++;
+   //wait for play trigger to be HIGH before reading switches for next song.
+   
+  playtrig = 0;
+  while (playtrig == 0)
+  {
+    bs0 = digitalRead(b0);
+    bs1 = digitalRead(b1);
+    bs2 = digitalRead(b2);
+    bs3 = digitalRead(b3);
+    bs4 = digitalRead(b4);
+    bs5 = digitalRead(b5);
+    bs6 = digitalRead(b6);
+    playtrig = digitalRead(b7);
+  }
+  
+  inbyte=0;
+  if (bs0 == HIGH) {     
+    inbyte += 1;
+  } 
+  if (bs1 == HIGH) {     
+    inbyte += 2;
+  } 
+  if (bs2 == HIGH) {     
+    inbyte += 4;
+  } 
+  if (bs3 == HIGH) {     
+    inbyte += 8;
+  } 
+  if (bs4 == HIGH) {     
+    inbyte += 16;
+  } 
+  if (bs5 == HIGH) {     
+    inbyte += 32;
+  } 
+  if (bs6 == HIGH) {     
+    inbyte += 64;
+  } 
+  //if (bs7 == HIGH) {     
+  //  inbyte += 128;
+  //}
+ 
    resetGlobalVars();
-   if (debugSong)
-   {
-     while (1==1) { inbyte = 0; }
-   }
 }
 
